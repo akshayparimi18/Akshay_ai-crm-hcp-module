@@ -135,5 +135,48 @@ def edit_interaction(
     finally:
         db.close()
 
-# Export tools for LangGraph
-crm_tools = [log_complete_interaction, generate_ai_follow_ups, edit_interaction]
+# =====================================================================
+# Tool 4: get_hcp_history
+# =====================================================================
+class GetHCPHistoryInput(BaseModel):
+    hcp_name: str = Field(description="Name of the HCP to search for")
+
+@tool("get_hcp_history", args_schema=GetHCPHistoryInput)
+def get_hcp_history(hcp_name: str) -> str:
+    """Retrieves past interaction records for a specific Healthcare Professional. Use this if the rep asks 'Have I met with Dr. X before?'"""
+    db = SessionLocal()
+    try:
+        interactions = db.query(Interaction).filter(Interaction.hcp_name == hcp_name).order_by(Interaction.id.desc()).limit(3).all()
+        if not interactions:
+            return f"No past interactions found in the database for {hcp_name}."
+        
+        history = [f"Date: {i.date}, Topic: {i.topics_discussed}, Sentiment: {i.sentiment}" for i in interactions]
+        return f"Recent history for {hcp_name}: " + " | ".join(history)
+    except Exception as e:
+        return f"Failed to retrieve history: {str(e)}"
+    finally:
+        db.close()
+
+# =====================================================================
+# Tool 5: escalate_compliance_issue
+# =====================================================================
+class EscalateIssueInput(BaseModel):
+    hcp_name: str = Field(description="Name of the HCP")
+    reason: str = Field(description="Reason for escalation (e.g., sample limit exceeded)")
+
+@tool("escalate_compliance_issue", args_schema=EscalateIssueInput)
+def escalate_compliance_issue(hcp_name: str, reason: str) -> str:
+    """Escalates a compliance violation or critical issue to the regional manager."""
+    # This is a mocked action to demonstrate QMS escalation capabilities
+    return f"ALERT SENT: Successfully escalated issue regarding {hcp_name} to the Regional Manager. Reason: {reason}"
+
+# =====================================================================
+# Export ALL 5 tools for LangGraph
+# =====================================================================
+crm_tools = [
+    log_complete_interaction, 
+    generate_ai_follow_ups, 
+    edit_interaction, 
+    get_hcp_history, 
+    escalate_compliance_issue
+]
