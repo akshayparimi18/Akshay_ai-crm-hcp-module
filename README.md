@@ -1,7 +1,5 @@
 # AI-First HCP CRM Module 🩺🤖
 
-![App Screenshot](screenshot.png)
-
 [![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![React](https://img.shields.io/badge/React-18.0-blue.svg)](https://reactjs.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Latest-009688.svg)](https://fastapi.tiangolo.com/)
@@ -77,6 +75,3 @@ npm run dev
 The app will be available at `http://localhost:5173`. Ensure the backend is running on `http://127.0.0.1:8000`.
 
 ---
-
-## 📜 License
-This project is for educational/assignment purposes as part of the AI-First CRM project.
