@@ -1,0 +1,30 @@
+# Environment & secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Database
+crm.db
+*.db
+
+# Node
+node_modules/
+dist/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Unrelated projects in this directory
+akshayparimi18.github.io/
+yolo_custom_tracking/
+yolo_football_tracker/
+generate_ppt.py
+QMS_Presentation.pptx
