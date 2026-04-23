@@ -17,8 +17,9 @@ class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
 
 def get_agent():
-    tool_caller_llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
-    reasoning_llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0.2)
+    # Using the exact model requested in the Task 1 instructions
+    tool_caller_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
+    reasoning_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.2)
     
     tool_caller_llm_with_tools = tool_caller_llm.bind_tools(crm_tools)
     tool_node = ToolNode(crm_tools)
