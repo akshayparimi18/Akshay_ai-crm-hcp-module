@@ -111,10 +111,12 @@ COMPLIANCE TRANSPARENCY:
     def call_reasoning_model(state: AgentState):
         messages = state['messages']
         
-        # Filter to only relevant messages for the summary — skip compliance error noise
+        # Filter to relevant messages — keep human, AI (tool calls), and SUCCESSFUL tool results
         filtered = []
         for m in messages:
             if isinstance(m, HumanMessage):
+                filtered.append(m)
+            elif hasattr(m, "tool_calls") and m.tool_calls:
                 filtered.append(m)
             elif isinstance(m, ToolMessage) and "COMPLIANCE ERROR" not in m.content:
                 filtered.append(m)
