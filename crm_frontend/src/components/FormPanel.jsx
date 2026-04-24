@@ -1,9 +1,20 @@
 import React from 'react';
-import { useSelector } from 'react-redux';
+import { useSelector, useDispatch } from 'react-redux';
 import { Search, Calendar, Clock, Mic, Plus } from 'lucide-react';
+import { updateFormField } from '../features/crm/crmSlice';
 
 const FormPanel = () => {
+  const dispatch = useDispatch();
   const formData = useSelector((state) => state.crm.formData);
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    dispatch(updateFormField({ field: name, value }));
+  };
+
+  const handleRadioChange = (value) => {
+    dispatch(updateFormField({ field: 'sentiment', value }));
+  };
 
   return (
     <div className="panel-container">
@@ -22,16 +33,22 @@ const FormPanel = () => {
                 <Search size={16} className="form-input-icon" />
                 <input
                   type="text"
+                  name="hcp_name"
                   className="form-input with-icon"
                   value={formData.hcp_name || ''}
-                  readOnly
+                  onChange={handleChange}
                   placeholder="Search or select HCP..."
                 />
               </div>
             </div>
             <div className="form-group" style={{ flex: 1 }}>
               <label className="form-label">Interaction Type</label>
-              <select className="form-input" disabled value={formData.interaction_type || 'Meeting'}>
+              <select 
+                name="interaction_type"
+                className="form-input" 
+                value={formData.interaction_type || 'Meeting'}
+                onChange={handleChange}
+              >
                 <option value="Meeting">Meeting</option>
                 <option value="Call">Call</option>
                 <option value="Email">Email</option>
@@ -46,9 +63,10 @@ const FormPanel = () => {
               <div className="form-input-wrapper">
                 <input
                   type="text"
+                  name="date"
                   className="form-input"
                   value={formData.date || ''}
-                  readOnly
+                  onChange={handleChange}
                   placeholder="DD-MM-YYYY"
                 />
                 <Calendar size={16} style={{ position: 'absolute', right: '0.75rem', color: 'var(--text-muted)' }} />
@@ -59,9 +77,10 @@ const FormPanel = () => {
               <div className="form-input-wrapper">
                 <input
                   type="text"
+                  name="time"
                   className="form-input"
                   value={formData.time || ''}
-                  readOnly
+                  onChange={handleChange}
                   placeholder="HH:MM"
                 />
                 <Clock size={16} style={{ position: 'absolute', right: '0.75rem', color: 'var(--text-muted)' }} />
@@ -74,9 +93,10 @@ const FormPanel = () => {
             <label className="form-label">Attendees</label>
             <input
               type="text"
+              name="attendees"
               className="form-input"
               value={formData.attendees || ''}
-              readOnly
+              onChange={handleChange}
               placeholder="Enter names or search..."
             />
           </div>
@@ -86,9 +106,10 @@ const FormPanel = () => {
             <label className="form-label">Topics Discussed</label>
             <div className="form-input-wrapper">
               <textarea
+                name="topics_discussed"
                 className="form-input"
                 value={formData.topics_discussed || ''}
-                readOnly
+                onChange={handleChange}
                 rows={3}
                 placeholder="Enter key discussion points..."
                 style={{ resize: 'none' }}
@@ -105,12 +126,13 @@ const FormPanel = () => {
             <div className="form-input-wrapper">
               <input
                 type="text"
+                name="materials_shared"
                 className="form-input"
                 value={formData.materials_shared || ''}
-                readOnly
+                onChange={handleChange}
                 placeholder="No materials added."
               />
-              <button className="form-input-action-btn">
+              <button className="form-input-action-btn" type="button">
                 <Search size={14} /> Search/Add
               </button>
             </div>
@@ -122,12 +144,13 @@ const FormPanel = () => {
             <div className="form-input-wrapper">
               <input
                 type="text"
+                name="samples_distributed"
                 className="form-input"
                 value={formData.samples_distributed || ''}
-                readOnly
+                onChange={handleChange}
                 placeholder="No samples added."
               />
-              <button className="form-input-action-btn">
+              <button className="form-input-action-btn" type="button">
                 <Plus size={14} /> Add Sample
               </button>
             </div>
@@ -139,13 +162,28 @@ const FormPanel = () => {
           <div className="form-group">
             <div className="radio-group">
               <label className="radio-option">
-                <input type="radio" checked={formData.sentiment === 'Positive'} readOnly disabled /> Positive
+                <input 
+                  type="radio" 
+                  name="sentiment" 
+                  checked={formData.sentiment === 'Positive'} 
+                  onChange={() => handleRadioChange('Positive')} 
+                /> Positive
               </label>
               <label className="radio-option">
-                <input type="radio" checked={formData.sentiment === 'Neutral'} readOnly disabled /> Neutral
+                <input 
+                  type="radio" 
+                  name="sentiment" 
+                  checked={formData.sentiment === 'Neutral'} 
+                  onChange={() => handleRadioChange('Neutral')} 
+                /> Neutral
               </label>
               <label className="radio-option">
-                <input type="radio" checked={formData.sentiment === 'Negative'} readOnly disabled /> Negative
+                <input 
+                  type="radio" 
+                  name="sentiment" 
+                  checked={formData.sentiment === 'Negative'} 
+                  onChange={() => handleRadioChange('Negative')} 
+                /> Negative
               </label>
             </div>
           </div>
@@ -156,9 +194,10 @@ const FormPanel = () => {
           <div className="form-group">
             <label className="form-label">Outcomes</label>
             <textarea
+              name="outcomes"
               className="form-input"
               value={formData.outcomes || ''}
-              readOnly
+              onChange={handleChange}
               rows={2}
               placeholder="Key outcomes or agreements..."
               style={{ resize: 'none' }}
@@ -169,9 +208,10 @@ const FormPanel = () => {
           <div className="form-group">
             <label className="form-label">Follow-up Actions</label>
             <textarea
+              name="follow_up_actions"
               className="form-input"
               value={formData.follow_up_actions || ''}
-              readOnly
+              onChange={handleChange}
               rows={2}
               placeholder="Enter next steps or tasks..."
               style={{ resize: 'none' }}
@@ -201,3 +241,4 @@ const FormPanel = () => {
 };
 
 export default FormPanel;
+

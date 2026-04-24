@@ -42,6 +42,10 @@ const crmSlice = createSlice({
   reducers: {
     addUserMessage: (state, action) => {
       state.chatHistory.push({ sender: 'user', text: action.payload });
+    },
+    updateFormField: (state, action) => {
+      const { field, value } = action.payload;
+      state.formData[field] = value;
     }
   },
   extraReducers: (builder) => {
@@ -73,5 +77,6 @@ const crmSlice = createSlice({
   }
 });
 
-export const { addUserMessage } = crmSlice.actions;
+export const { addUserMessage, updateFormField } = crmSlice.actions;
 export default crmSlice.reducer;
+
