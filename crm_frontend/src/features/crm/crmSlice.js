@@ -6,7 +6,7 @@ export const sendChatMessage = createAsyncThunk(
   'crm/sendChatMessage',
   async (text, { rejectWithValue }) => {
     try {
-      const response = await axios.post('http://127.0.0.1:8000/api/chat', { text });
+      const response = await axios.post('https://crm-api-backend-4yam.onrender.com/api/chat', { text });
       return response.data; // { reply: "...", form_data: {...} }
     } catch (error) {
       return rejectWithValue(error.message || 'Could not connect to the CRM backend.');
