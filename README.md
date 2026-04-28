@@ -1,5 +1,7 @@
 # AI-First HCP CRM Module 🩺🤖
 
+**🚀 Live Demo:** [https://akshay-ai-crm-hcp-module.vercel.app](https://akshay-ai-crm-hcp-module.vercel.app)
+
 [![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![React](https://img.shields.io/badge/React-18.0-blue.svg)](https://reactjs.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Latest-009688.svg)](https://fastapi.tiangolo.com/)
