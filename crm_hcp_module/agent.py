@@ -17,9 +17,9 @@ class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
 
 def get_agent():
-    # Added the 'qwen/' prefix required by Groq's API
-    tool_caller_llm = ChatGroq(model="qwen/qwen3.6-27b", temperature=0)
-    reasoning_llm = ChatGroq(model="qwen/qwen3.6-27b", temperature=0.2)
+    # Switching to the 120B model for strict JSON schema adherence
+    tool_caller_llm = ChatGroq(model="gpt-oss-120b", temperature=0)
+    reasoning_llm = ChatGroq(model="gpt-oss-120b", temperature=0.2)
     
     tool_caller_llm_with_tools = tool_caller_llm.bind_tools(crm_tools)
     tool_node = ToolNode(crm_tools)
