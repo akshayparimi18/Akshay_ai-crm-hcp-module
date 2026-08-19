@@ -1,3 +1,4 @@
+import traceback
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
@@ -88,6 +89,10 @@ async def handle_chat(request: ChatRequest):
             "form_data": extracted_form_data
         }
     except Exception as e:
+        # This will print the full error to the Render logs
+        print("CRITICAL ERROR IN /api/chat:")
+        traceback.print_exc() 
+        # Then re-raise the 500 so the frontend still knows it failed
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
