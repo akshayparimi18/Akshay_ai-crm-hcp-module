@@ -17,9 +17,9 @@ class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
 
 def get_agent():
-    # Updated to a supported Groq model (3.3 is currently throwing a 404)
-    tool_caller_llm = ChatGroq(model="llama-3.1-70b-versatile", temperature=0)
-    reasoning_llm = ChatGroq(model="llama-3.1-70b-versatile", temperature=0.2)
+    # Updated to the new Groq recommended models post-August 16
+    tool_caller_llm = ChatGroq(model="qwen3.6-27b", temperature=0)
+    reasoning_llm = ChatGroq(model="qwen3.6-27b", temperature=0.2)
     
     tool_caller_llm_with_tools = tool_caller_llm.bind_tools(crm_tools)
     tool_node = ToolNode(crm_tools)
