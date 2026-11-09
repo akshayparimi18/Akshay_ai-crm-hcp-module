@@ -30,6 +30,32 @@ app.add_middleware(
 class ChatRequest(BaseModel):
     text: str
 
+@app.get("/api/models")
+async def list_available_models():
+    import os, urllib.request, json, urllib.error
+    key = os.getenv("GROQ_API_KEY", "").strip()
+    if not key:
+        return {"error": "GROQ_API_KEY environment variable is missing or empty"}
+    try:
+        req = urllib.request.Request(
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode())
+            return {
+                "key_preview": f"{key[:8]}...{key[-4:]}" if len(key) > 12 else "too-short",
+                "models": [m["id"] for m in data.get("data", [])]
+            }
+    except urllib.error.HTTPError as e:
+        return {
+            "error": "Groq API HTTP Error",
+            "status": e.code,
+            "body": e.read().decode()
+        }
+    except Exception as e:
+        return {"error": "Unexpected error", "detail": str(e)}
+
 @app.post("/api/chat")
 async def handle_chat(request: ChatRequest):
     if not request.text:

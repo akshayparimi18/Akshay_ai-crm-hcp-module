@@ -16,10 +16,44 @@ load_dotenv()
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
 
+def get_supported_model() -> str:
+    key = os.getenv("GROQ_API_KEY", "").strip()
+    preferred = [
+        "llama-3.3-70b-versatile",
+        "llama-3.1-8b-instant",
+        "llama-3.1-70b-versatile",
+        "llama3-70b-8192",
+        "llama3-8b-8192",
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b",
+        "gemma2-9b-it"
+    ]
+    if key:
+        try:
+            import urllib.request, json
+            req = urllib.request.Request(
+                "https://api.groq.com/openai/v1/models",
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                data = json.loads(resp.read().decode())
+                available = [m["id"] for m in data.get("data", [])]
+                for p in preferred:
+                    if p in available:
+                        print(f"✅ Selected Groq model: {p}")
+                        return p
+                for m_id in available:
+                    if "whisper" not in m_id and "guard" not in m_id:
+                        print(f"✅ Fallback to Groq model: {m_id}")
+                        return m_id
+        except Exception as e:
+            print("Notice: Could not dynamically inspect Groq models:", e)
+    return "llama-3.1-8b-instant"
+
 def get_agent():
-    # Using Llama 3.1 8B Instant on Groq for universal access, tool calling, and high speed
-    tool_caller_llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
-    reasoning_llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0.2)
+    selected_model = get_supported_model()
+    tool_caller_llm = ChatGroq(model=selected_model, temperature=0)
+    reasoning_llm = ChatGroq(model=selected_model, temperature=0.2)
     
     tool_caller_llm_with_tools = tool_caller_llm.bind_tools(crm_tools)
     tool_node = ToolNode(crm_tools)
