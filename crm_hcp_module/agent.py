@@ -17,9 +17,9 @@ class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
 
 def get_agent():
-    # Using Llama 3.3 70B on Groq for state-of-the-art tool calling and reasoning
-    tool_caller_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
-    reasoning_llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0.2)
+    # Using Llama 3.1 8B Instant on Groq for universal access, tool calling, and high speed
+    tool_caller_llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0)
+    reasoning_llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0.2)
     
     tool_caller_llm_with_tools = tool_caller_llm.bind_tools(crm_tools)
     tool_node = ToolNode(crm_tools)
