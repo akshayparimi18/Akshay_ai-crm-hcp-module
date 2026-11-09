@@ -12,6 +12,14 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL is not set in the .env file. Please add your PostgreSQL connection string.")
 
+# SQLAlchemy 1.4+ / 2.0 compatibility for Heroku/Render/Neon postgres URLs
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+# Ensure psycopg2 driver is explicitly used if no driver is specified
+if DATABASE_URL.startswith("postgresql://") and not DATABASE_URL.startswith("postgresql+"):
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
+
 # Engine setup for PostgreSQL (pool_pre_ping keeps connections alive)
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
