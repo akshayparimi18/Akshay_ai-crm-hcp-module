@@ -17,6 +17,7 @@ load_dotenv()
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").strip()
 GROQ_FALLBACK_MODEL = os.getenv("GROQ_FALLBACK_MODEL", "openai/gpt-oss-20b").strip()
+GROQ_TERTIARY_MODEL = os.getenv("GROQ_TERTIARY_MODEL", "qwen/qwen3.8-27b").strip()
 
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]
@@ -33,48 +34,52 @@ def get_agent():
     primary_tool_llm = create_groq_llm(GROQ_MODEL, temperature=0.0)
     primary_reasoning_llm = create_groq_llm(GROQ_MODEL, temperature=0.1)
     
-    # Fallback models (20B and 8B instant)
+    # Fallback models: 20B and Qwen 27B
     fallback_20b_tool_llm = create_groq_llm(GROQ_FALLBACK_MODEL, temperature=0.0)
-    fallback_8b_tool_llm = create_groq_llm("llama-3.1-8b-instant", temperature=0.0)
+    fallback_tertiary_tool_llm = create_groq_llm(GROQ_TERTIARY_MODEL, temperature=0.0)
     
     # Bind tools to models
     primary_tool_caller = primary_tool_llm.bind_tools(crm_tools)
     fallback_20b_caller = fallback_20b_tool_llm.bind_tools(crm_tools)
-    fallback_8b_caller = fallback_8b_tool_llm.bind_tools(crm_tools)
+    fallback_tertiary_caller = fallback_tertiary_tool_llm.bind_tools(crm_tools)
     
     # LangChain declarative fallback chain
     tool_caller_with_fallbacks = primary_tool_caller.with_fallbacks([
         fallback_20b_caller,
-        fallback_8b_caller
+        fallback_tertiary_caller
     ])
     
     fallback_20b_reasoning = create_groq_llm(GROQ_FALLBACK_MODEL, temperature=0.1)
-    fallback_8b_reasoning = create_groq_llm("llama-3.1-8b-instant", temperature=0.1)
+    fallback_tertiary_reasoning = create_groq_llm(GROQ_TERTIARY_MODEL, temperature=0.1)
     reasoning_with_fallbacks = primary_reasoning_llm.with_fallbacks([
         fallback_20b_reasoning,
-        fallback_8b_reasoning
+        fallback_tertiary_reasoning
     ])
     
     tool_node = ToolNode(crm_tools)
 
-    current_date = datetime.now().strftime("%A, %Y-%m-%d")
-    current_time = datetime.now().strftime("%I:%M %p")
+    now = datetime.now()
+    current_date_iso = now.strftime("%Y-%m-%d")
+    current_time_24h = now.strftime("%H:%M")
     
     system_prompt = f"""You are an internal CRM assistant talking DIRECTLY to a pharmaceutical sales rep. Your job is to parse their messy natural language notes, extract structured information, and update the CRM database using your available tools.
 
 CRITICAL RULES:
-1. Today's date is {current_date}. The current time is {current_time}. Use this to infer "today" or relative times if the user doesn't specify.
-2. ALWAYS use the `log_complete_interaction` tool first to capture the core data points.
+1. Today's date is {current_date_iso} (YYYY-MM-DD). The current time is {current_time_24h} (24-hour HH:MM). If the user does not explicitly specify a date or time, ALWAYS default `date` to "{current_date_iso}" and `time` to "{current_time_24h}".
+2. ALWAYS use the `log_complete_interaction` tool first to capture the core data points. 
+   - If interaction type is not specified, default `interaction_type` to "Meeting".
+   - If topics discussed are not specified, infer a sensible description from context (e.g. "Sample provision & product review" or "Discussion on product clinical data").
+   - For `samples_distributed`, if the user mentions samples (e.g. "10 samples" or "gave 10 samples"), log the exact count/string e.g. "10 samples".
 3. After logging the interaction, ALWAYS use the `generate_ai_follow_ups` tool to create 2-3 actionable next steps for the rep based on the meeting's topics and outcomes. You must do this automatically.
-4. For `sentiment`, strictly use "Positive", "Neutral", or "Negative".
+4. For `sentiment`, strictly use "Positive", "Neutral", or "Negative" (infer "Positive" when the interaction is favorable or cooperative).
 5. If the user corrects you, use `edit_interaction`.
 6. If you receive a COMPLIANCE ERROR in a tool response, follow its instructions EXACTLY to fix the tool call and retry. Do NOT repeat the same rejected values.
 7. IMPORTANT: After ALL your tool calls have been successfully executed, you MUST generate a brief, friendly text summary confirming what was logged and any follow-up actions. Never end the conversation on a tool call — always finish with a human-readable message.
 
 TOOL CALLING & SCHEMA RULES:
 - Invoke only one tool at a time with strictly valid JSON arguments adhering exactly to the schema.
-- For optional fields not mentioned in notes, pass null or omit them rather than fabricating values.
-- Never invent attendees, topics, or materials if not stated by the rep.
+- For optional fields not mentioned in notes, pass null or sensible defaults rather than fabricating imaginary doctors or materials.
+- Never invent additional attendees or clinical materials if not mentioned by the rep.
 
 PERSONA RULES:
 - You are talking to the SALES REP, not to a doctor or HCP. Address the rep directly (e.g., "I've logged your meeting...").
@@ -98,8 +103,8 @@ COMPLIANCE TRANSPARENCY:
                 response = fallback_20b_caller.invoke(messages)
                 return {"messages": [response]}
             except Exception as secondary_err:
-                print(f"⚠️ Rescue fallback 20b failed: {secondary_err}. Falling back to 8b...")
-                response = fallback_8b_caller.invoke(messages)
+                print(f"⚠️ Rescue fallback 20b failed: {secondary_err}. Falling back to Qwen...")
+                response = fallback_tertiary_caller.invoke(messages)
                 return {"messages": [response]}
 
     def should_continue(state: AgentState):
@@ -177,8 +182,12 @@ COMPLIANCE TRANSPARENCY:
             return {"messages": [response]}
         except Exception as e:
             print(f"⚠️ Reasoning model fallback: {e}")
-            response = fallback_20b_reasoning.invoke(summary_messages)
-            return {"messages": [response]}
+            try:
+                response = fallback_20b_reasoning.invoke(summary_messages)
+                return {"messages": [response]}
+            except Exception as e2:
+                response = fallback_tertiary_reasoning.invoke(summary_messages)
+                return {"messages": [response]}
 
     workflow = StateGraph(AgentState)
     workflow.add_node("agent", call_tool_model)

@@ -1,5 +1,8 @@
 import os
+import json
 import traceback
+from datetime import datetime
+from typing import Optional
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
@@ -18,7 +21,7 @@ app = FastAPI(
     description="Production-ready FastAPI backend using LangGraph stateful agents and dual Groq LLMs"
 )
 
-# CORS configuration
+# CORS configuration allowing Vercel deployment and local dev origins
 allowed_origins = [
     "https://akshay-ai-crm-hcp-module.vercel.app",
     "http://localhost:3000",
@@ -64,7 +67,7 @@ async def list_available_models():
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode())
             return {
-                "key_preview": f"{key[:8]}...{key[-4:]}" if len(key) > 12 else "too-short",
+                "api_key_configured": bool(key),
                 "active_model": os.getenv("GROQ_MODEL", GROQ_MODEL),
                 "models": [m["id"] for m in data.get("data", [])]
             }
@@ -78,12 +81,18 @@ async def list_available_models():
         return {"error": "Unexpected error", "detail": str(e)}
 
 class ChatRequest(BaseModel):
-    text: str
+    text: Optional[str] = None
+    message: Optional[str] = None
+
+    def get_prompt(self) -> str:
+        prompt = (self.text or self.message or "").strip()
+        return prompt
 
 @app.post("/api/chat")
 async def handle_chat(request: ChatRequest):
-    if not request.text:
-        raise HTTPException(status_code=400, detail="Text input is required")
+    user_prompt = request.get_prompt()
+    if not user_prompt:
+        raise HTTPException(status_code=400, detail="Text or message input is required")
         
     try:
         # Get the compiled LangGraph agent
@@ -91,7 +100,7 @@ async def handle_chat(request: ChatRequest):
         
         # 1. Run the LangGraph agent
         result = agent.invoke(
-            {"messages": [HumanMessage(content=request.text)]},
+            {"messages": [HumanMessage(content=user_prompt)]},
             config={"recursion_limit": 25}
         )
         
@@ -106,19 +115,85 @@ async def handle_chat(request: ChatRequest):
                     if not (hasattr(msg, 'tool_calls') and msg.tool_calls):
                         final_reply = msg.content
                         break
-                        
-        # 3. Extract parsed structured data from log_complete_interaction
-        extracted_data = {}
+
+        # 3. Multi-Tool Data Aggregation
+        now = datetime.now()
+        default_date = now.strftime("%Y-%m-%d")
+        default_time = now.strftime("%H:%M")
+
+        aggregated_data = {
+            "hcp_name": "",
+            "interaction_type": "Meeting",
+            "date": default_date,
+            "time": default_time,
+            "attendees": "",
+            "topics_discussed": "",
+            "materials_shared": "",
+            "samples_distributed": "",
+            "sentiment": "Positive",
+            "outcomes": "",
+            "follow_up_actions": "",
+            "ai_suggested_follow_ups": []
+        }
+
+        # Inspect all tool calls across all messages in this turn
         for msg in result["messages"]:
             if hasattr(msg, 'tool_calls') and msg.tool_calls:
                 for tc in msg.tool_calls:
-                    if tc['name'] == 'log_complete_interaction':
-                        extracted_data = tc['args']
-                        break
-                        
+                    args = tc.get('args', {}) or {}
+                    name = tc.get('name', '')
+
+                    if name in ('log_complete_interaction', 'edit_interaction'):
+                        for key, val in args.items():
+                            if val is not None and str(val).strip() != "":
+                                # Normalize sentiment
+                                if key == "sentiment":
+                                    s_val = str(val).capitalize()
+                                    if s_val in ["Positive", "Neutral", "Negative"]:
+                                        aggregated_data["sentiment"] = s_val
+                                # Format samples distributed (e.g., 10 -> "10 samples")
+                                elif key == "samples_distributed":
+                                    s_val = str(val).strip()
+                                    if s_val.isdigit():
+                                        aggregated_data["samples_distributed"] = f"{s_val} samples"
+                                    else:
+                                        aggregated_data["samples_distributed"] = s_val
+                                else:
+                                    aggregated_data[key] = val
+
+                    elif name == 'generate_ai_follow_ups':
+                        suggestions = args.get('suggestions') or []
+                        if isinstance(suggestions, list) and suggestions:
+                            aggregated_data['ai_suggested_follow_ups'] = suggestions
+                        elif isinstance(suggestions, str):
+                            try:
+                                parsed = json.loads(suggestions)
+                                if isinstance(parsed, list):
+                                    aggregated_data['ai_suggested_follow_ups'] = parsed
+                            except Exception:
+                                aggregated_data['ai_suggested_follow_ups'] = [suggestions]
+
+        # Apply robust fallbacks for required form inputs if missing
+        if not aggregated_data.get("interaction_type"):
+            aggregated_data["interaction_type"] = "Meeting"
+        if not aggregated_data.get("date"):
+            aggregated_data["date"] = default_date
+        if not aggregated_data.get("time"):
+            aggregated_data["time"] = default_time
+        if not aggregated_data.get("sentiment"):
+            aggregated_data["sentiment"] = "Positive"
+
+        # If topics_discussed is empty, infer from context
+        if not aggregated_data.get("topics_discussed"):
+            if aggregated_data.get("samples_distributed"):
+                aggregated_data["topics_discussed"] = f"Product discussion & sample provision ({aggregated_data['samples_distributed']})"
+            else:
+                aggregated_data["topics_discussed"] = "Discussion on product clinical data and efficacy"
+
         return {
             "reply": final_reply,
-            "extracted_data": extracted_data
+            "form_data": aggregated_data,
+            "extracted_data": aggregated_data
         }
         
     except Exception as e:
