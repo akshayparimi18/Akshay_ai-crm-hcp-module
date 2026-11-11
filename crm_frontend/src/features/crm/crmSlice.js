@@ -81,7 +81,7 @@ const crmSlice = createSlice({
             formatted.ai_suggested_follow_ups = [];
           }
 
-          // Format attendees and deduplicate short surname references
+          // Format attendees: remove primary HCP, deduplicate short surname references
           if (formatted.attendees) {
             let attList = Array.isArray(formatted.attendees) 
               ? formatted.attendees 
@@ -89,9 +89,24 @@ const crmSlice = createSlice({
             
             attList = attList.map(a => a.trim()).filter(Boolean);
             
+            // Extract primary HCP surname if present
+            const primaryTokens = formatted.hcp_name 
+              ? formatted.hcp_name.replace(/^(?:Dr\.|Doctor)\s*/i, '').trim().split(/\s+/)
+              : [];
+            const primarySurname = primaryTokens.length > 0 
+              ? primaryTokens[primaryTokens.length - 1].toLowerCase() 
+              : null;
+
             const deduped = [];
             attList.forEach(name => {
+              // Primary doctor belongs in HCP Name, not attendees
+              if (formatted.hcp_name && name.toLowerCase() === formatted.hcp_name.toLowerCase()) {
+                return;
+              }
               const tokens = name.replace(/^(?:Dr\.|Doctor)\s*/i, '').trim().split(/\s+/);
+              if (tokens.length === 1 && primarySurname && tokens[0].toLowerCase() === primarySurname) {
+                return;
+              }
               if (tokens.length === 1) {
                 const surname = tokens[0].toLowerCase();
                 const hasFullName = attList.some(other => {
@@ -107,17 +122,18 @@ const crmSlice = createSlice({
             });
             formatted.attendees = deduped.join(', ');
           }
-
-          // Ensure attendees is never empty if hcp_name is present
-          if (!formatted.attendees && formatted.hcp_name) {
-            formatted.attendees = formatted.hcp_name;
-          }
           
-          // Format samples_distributed cleanly (e.g. 5 -> "5 samples")
+          // Format samples_distributed cleanly (e.g. 5 -> "5 samples") and enforce compliance cap
           if (formatted.samples_distributed) {
             const rawSamples = String(formatted.samples_distributed).trim();
             if (/^\d+$/.test(rawSamples)) {
-              formatted.samples_distributed = `${rawSamples} samples`;
+              const num = parseInt(rawSamples, 10);
+              formatted.samples_distributed = num > 10 ? '10 samples' : `${num} samples`;
+            } else {
+              const match = rawSamples.match(/\b(\d+)\s+samples?\b/i);
+              if (match && parseInt(match[1], 10) > 10) {
+                formatted.samples_distributed = rawSamples.replace(/\b\d+(\s+samples?\b)/i, '10$1');
+              }
             }
           }
           
@@ -137,7 +153,7 @@ const crmSlice = createSlice({
           // Merge each valid field into state.formData
           Object.keys(formatted).forEach((key) => {
             const val = formatted[key];
-            if (val !== null && val !== undefined && val !== '') {
+            if (val !== null && val !== undefined) {
               state.formData[key] = val;
             }
           });

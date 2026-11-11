@@ -1,9 +1,32 @@
 import json
 import re
+from datetime import datetime, timezone, timedelta
 from pydantic import BaseModel, Field
 from typing import List, Optional, Union
 from langchain_core.tools import tool
 from database import SessionLocal, Interaction
+
+# Indian Standard Time (IST, UTC+5:30)
+IST = timezone(timedelta(hours=5, minutes=30))
+
+def cap_samples_to_limit(samples_str: Optional[str]) -> Optional[str]:
+    """
+    Caps sample quantities exceeding 10 to 10.
+    CRITICAL: Only matches digits preceding 'sample' or 'samples'.
+    Never confuses dosage strengths (e.g. 50mg, 10mg) with sample count.
+    """
+    if not samples_str:
+        return samples_str
+    s = str(samples_str).strip()
+    match = re.search(r'\b(\d+)\s+samples?\b', s, re.IGNORECASE)
+    if match:
+        qty = int(match.group(1))
+        if qty > 10:
+            return re.sub(r'\b\d+(\s+samples?\b)', r'10\1', s, count=1, flags=re.IGNORECASE)
+    elif s.isdigit():
+        qty = int(s)
+        return "10 samples" if qty > 10 else f"{qty} samples"
+    return s
 
 # =====================================================================
 # Tool 1: log_complete_interaction
@@ -16,7 +39,7 @@ class LogInteractionInput(BaseModel):
     attendees: Optional[Union[str, List[str]]] = Field(default=None, description="Names of any additional physicians, colleagues, or staff present (e.g. 'Dr. Rahul Mehta' or ['Dr. Rahul Mehta'])")
     topics_discussed: Optional[str] = Field(default=None, description="Clinical topics, drug details, trial data, or subjects discussed")
     materials_shared: Optional[str] = Field(default=None, description="Materials, brochures, clinical trial papers, or decks shared")
-    samples_distributed: Optional[str] = Field(default=None, description="Drug samples distributed (e.g. '5 samples of OncoBoost 50mg'). Record the EXACT quantity specified by the user.")
+    samples_distributed: Optional[str] = Field(default=None, description="Drug samples distributed (e.g. '5 samples of OncoBoost 50mg'). Record exact quantity if <= 10, cap at 10 if > 10.")
     sentiment: Optional[str] = Field(default=None, description="Observed sentiment: strictly 'Positive', 'Neutral', or 'Negative'")
     outcomes: Optional[str] = Field(default=None, description="Key takeaways, conclusions, or physician response")
     follow_up_actions: Optional[str] = Field(default=None, description="Follow-up tasks, scheduled meetings, or commitments agreed upon")
@@ -41,6 +64,17 @@ def log_complete_interaction(
         attendees_str = ", ".join(str(a) for a in attendees if a)
     else:
         attendees_str = str(attendees) if attendees else None
+
+    # Fallback to dynamic live IST date and time if omitted
+    now_ist = datetime.now(IST)
+    if not date:
+        date = now_ist.strftime("%Y-%m-%d")
+    if not time:
+        time = now_ist.strftime("%H:%M")
+
+    # Enforce 10-sample compliance limit (preserving dosages like 50mg)
+    if samples_distributed:
+        samples_distributed = cap_samples_to_limit(samples_distributed)
 
     db = SessionLocal()
     try:
@@ -126,6 +160,9 @@ def edit_interaction(
         attendees_str = ", ".join(str(a) for a in attendees if a)
     else:
         attendees_str = str(attendees) if attendees else None
+
+    if samples_distributed:
+        samples_distributed = cap_samples_to_limit(samples_distributed)
 
     db = SessionLocal()
     try:

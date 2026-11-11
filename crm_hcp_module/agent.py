@@ -35,14 +35,15 @@ def create_groq_llm(model_name: str, temperature: float = 0.0):
 def parse_sample_count(text: str) -> Optional[int]:
     """
     Extracts the integer quantity of drug samples from text.
-    Strips dosage strings (e.g. 50mg, 100ml) so '50mg' is never confused with 50 samples.
+    CRITICAL: Only extracts digits preceding the word 'sample' or 'samples'.
+    Never confuses dosage strengths (e.g. 50mg, 10mg) with sample count.
     """
     if not text:
         return None
-    cleaned = re.sub(r'\b\d+\s*(?:mg|ml|mcg|g|kg|units?|tablets?|capsules?|pills?)\b', '', str(text), flags=re.IGNORECASE)
-    match = re.search(r'\b(\d+)\s*(?:samples?|vials?|packs?|boxes?)?\b', cleaned, re.IGNORECASE)
-    if match and match.group(1):
+    match = re.search(r'\b(\d+)\s+samples?\b', str(text), re.IGNORECASE)
+    if match:
         return int(match.group(1))
+    cleaned = re.sub(r'\b\d+\s*(?:mg|ml|mcg|g|kg|units?|tablets?|capsules?|pills?)\b', '', str(text), flags=re.IGNORECASE)
     nums = [int(n) for n in re.findall(r'\b\d+\b', cleaned)]
     if nums:
         return nums[0]
@@ -85,9 +86,11 @@ def get_agent():
     system_prompt = f"""You are an internal CRM assistant talking DIRECTLY to a pharmaceutical sales rep. Your job is to parse their messy natural language notes, extract structured information, and update the CRM database using your available tools.
 
 CRITICAL EXTRACTION & FIELD RULES:
-1. `hcp_name`: Primary Healthcare Professional (e.g. "Dr. Priya Nair").
-2. `attendees`: ALL doctors, colleagues, or staff present at the meeting (e.g. "Dr. Priya Nair, Dr. Karthik Reddy"). NEVER leave `attendees` blank when meeting participants are named. If a doctor is referred to later by short surname (e.g. "Dr. Nair"), do not duplicate them in `attendees`.
-3. `samples_distributed`: MUST preserve the EXACT quantity and product name stated by the user (e.g., "12 samples of CardioShield 10mg" or "5 samples of OncoBoost 50mg"). NEVER overwrite, reduce, or replace the user's sample count with "10 samples".
+1. `hcp_name`: Full name of ONLY the single primary Healthcare Professional (e.g. "Dr. Priya Nair" or "Dr. Ananya Verma"). NEVER include multiple doctors in this field.
+2. `attendees`: Any additional physicians, colleagues, or staff present at the meeting (e.g. "Dr. Karthik Reddy" or "Dr. Rahul Mehta"). If only one doctor was present, leave attendees empty. If a doctor is referred to later by short surname (e.g. "Dr. Nair"), do not duplicate them in `attendees`.
+3. `samples_distributed`: Compliance limit is 10 samples maximum per interaction.
+   - If the user specifies <= 10 samples (e.g., "5 samples of OncoBoost 50mg"), record the EXACT quantity and product name (e.g., "5 samples of OncoBoost 50mg"). DO NOT reduce or adjust it! (Note: dosage strengths like "50mg" or "10mg" are drug dosages, NOT sample quantities).
+   - If the user specifies > 10 samples (e.g., "12 samples of CardioShield 10mg" or "20 samples"), cap the sample quantity at 10 (e.g., "10 samples of CardioShield 10mg" or "10 samples").
 4. `materials_shared`: Clinical brochures, guides, trial summaries, or monographs shared (e.g., "clinical dosing guide").
 5. `topics_discussed`: Clinical topics, trial data, efficacy, or dosing discussed (e.g., "CardioShield hypertension data").
 6. `sentiment`: Strictly "Positive", "Neutral", or "Negative" (infer "Positive" when the interaction is favorable).
@@ -96,7 +99,9 @@ CRITICAL EXTRACTION & FIELD RULES:
 9. Today's date is {current_date_iso} (YYYY-MM-DD IST). The current time is {current_time_24h} (24-hour HH:MM IST). If the user does not specify date or time, default to "{current_date_iso}" and "{current_time_24h}".
 10. ALWAYS use the `log_complete_interaction` tool first to record all captured fields.
 11. After logging the interaction, ALWAYS use the `generate_ai_follow_ups` tool to generate 2-3 actionable next steps.
-12. IMPORTANT: After ALL tool calls have executed, generate a brief, friendly text confirmation addressed directly to the sales rep confirming the primary doctor, attendees, materials shared, and the EXACT samples recorded. NEVER claim samples were adjusted unless explicitly instructed."""
+12. IMPORTANT: After ALL tool calls have executed, generate a brief, friendly text confirmation addressed directly to the sales rep:
+   - Mention the primary doctor, any additional attendees, materials shared, and what was logged.
+   - For samples: If <= 10 samples were given (e.g. 5 samples of OncoBoost 50mg), confirm the EXACT count without claiming any adjustment. If > 10 samples were requested (e.g. 12 samples of CardioShield 10mg), confirm that 10 samples were recorded and politely mention that the quantity was capped at 10 due to compliance limits."""
 
     def call_tool_model(state: AgentState):
         messages = state['messages']
@@ -136,13 +141,13 @@ CRITICAL EXTRACTION & FIELD RULES:
         
         reasoning_prompt = (
             "You are an internal CRM assistant speaking DIRECTLY to a pharmaceutical sales rep. "
-            "Based on the conversation, generate a brief, friendly confirmation message. "
-            "Mention the primary HCP name, all attendees, materials shared, what was logged, and any follow-up actions. "
+            "Based on the conversation, generate a brief, friendly confirmation message (2-3 sentences). "
+            "Mention the primary HCP name, any additional attendees, materials shared, what was logged, and any follow-up actions. "
             "Keep it to 2-3 sentences. Do NOT use any tools. Just reply with plain text. "
             "CRITICAL RULES: "
-            "1) Address the sales rep directly (e.g., 'I\'ve logged your meeting...'). "
-            "2) Confirm the EXACT samples and product name provided by the rep (e.g. '12 samples of CardioShield 10mg' or '5 samples of OncoBoost 50mg'). "
-            "3) NEVER say samples were adjusted to 10 or changed. Always confirm the exact samples recorded."
+            "1) Address the sales rep directly (e.g., 'I\\'ve logged your meeting...'). "
+            "2) For samples: If the sales rep provided <= 10 samples (e.g. '5 samples of OncoBoost 50mg'), confirm the EXACT samples recorded. NEVER say samples were adjusted or capped. "
+            "3) If the sales rep requested > 10 samples (e.g. '12 samples of CardioShield 10mg' or '20 samples'), confirm that 10 samples were recorded and politely mention that the quantity was capped at 10 due to compliance limits."
         )
         summary_messages = [SystemMessage(content=reasoning_prompt)] + filtered
         try:

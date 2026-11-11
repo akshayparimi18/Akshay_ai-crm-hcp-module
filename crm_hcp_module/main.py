@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from database import Base, engine
 from agent import get_agent, GROQ_MODEL, IST
+from tools import cap_samples_to_limit
 from langchain_core.messages import HumanMessage
 
 # Ensure database tables are created on startup
@@ -85,6 +86,29 @@ def deduplicate_doctor_names(doc_list: List[str]) -> List[str]:
         if d not in result:
             result.append(d)
     return result
+
+def polish_reply(reply: str, user_prompt: str) -> str:
+    """
+    Guarantees AI reply aligns with the 10-sample compliance rule:
+    - If user provided <= 10 samples (e.g. 5 samples of OncoBoost 50mg), strips any hallucinated 'adjusted from...' or 'capped at...'.
+    - If user provided > 10 samples (e.g. 12 samples of CardioShield 10mg), ensures reply states 10 samples and politely mentions
+      the compliance limit cap.
+    """
+    m = re.search(r'\b(\d+)\s+samples?\b', user_prompt, re.IGNORECASE)
+    if not m:
+        return reply
+    qty = int(m.group(1))
+    if qty <= 10:
+        # User specified <= 10 samples: must NEVER claim adjustment
+        reply = re.sub(r'\s*\((?:adjusted|capped)[^)]*\)', '', reply, flags=re.IGNORECASE)
+        reply = re.sub(r'\s*,?\s*adjusted from the \d+ you mentioned', '', reply, flags=re.IGNORECASE)
+        reply = re.sub(r'\s*,?\s*capped from the \d+ you mentioned', '', reply, flags=re.IGNORECASE)
+    else:
+        # User specified > 10 samples: must cap at 10 and mention compliance
+        reply = re.sub(rf'\b{qty}\s+samples\b', '10 samples', reply, flags=re.IGNORECASE)
+        if not any(w in reply.lower() for w in ['complian', 'cap', 'limit', 'adjust', 'policy']):
+            reply = reply.rstrip() + " (Note: Recorded sample count was capped at the compliance limit of 10 samples per interaction)."
+    return reply
 
 @app.get("/")
 @app.get("/health")
@@ -232,18 +256,50 @@ async def handle_chat(request: ChatRequest):
         docs_raw = re.findall(r'\b(?:Dr\.|Doctor)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?', user_prompt)
         docs_deduped = deduplicate_doctor_names(docs_raw)
         
-        # Ensure hcp_name is set cleanly to the primary doctor
+        # Ensure hcp_name is set cleanly to ONLY the single primary doctor
         if docs_deduped:
-            aggregated_data["hcp_name"] = docs_deduped[0]
-            # Ensure attendees contains all deduplicated participants
-            aggregated_data["attendees"] = ", ".join(docs_deduped)
+            primary_hcp = docs_deduped[0]
+            aggregated_data["hcp_name"] = primary_hcp
+            # Any additional physicians go into attendees
+            secondary_docs = docs_deduped[1:]
+            if secondary_docs:
+                aggregated_data["attendees"] = ", ".join(secondary_docs)
+            else:
+                aggregated_data["attendees"] = ""
         elif aggregated_data.get("hcp_name"):
-            aggregated_data["attendees"] = aggregated_data["hcp_name"]
+            # Check if multiple doctors were placed in hcp_name by tool caller, split them
+            raw_hcp = aggregated_data["hcp_name"]
+            if "," in raw_hcp or " and " in raw_hcp.lower():
+                parts = [p.strip() for p in re.split(r'[,;]\s*|\s+and\s+', raw_hcp, flags=re.IGNORECASE) if p.strip()]
+                if parts:
+                    aggregated_data["hcp_name"] = parts[0]
+                    if len(parts) > 1 and not aggregated_data.get("attendees"):
+                        aggregated_data["attendees"] = ", ".join(parts[1:])
 
-        # Extract exact sample string from user prompt to prevent ANY accidental overwrite
+        # Clean attendees: ensure primary HCP and its short surname are not in attendees
+        if aggregated_data.get("attendees") and aggregated_data.get("hcp_name"):
+            prim = aggregated_data["hcp_name"]
+            prim_tokens = re.sub(r'^(?:Dr\.|Doctor)\s*', '', prim).strip().split()
+            prim_surname = prim_tokens[-1].lower() if prim_tokens else ""
+            
+            att_items = [a.strip() for a in re.split(r'[,;]\s*', str(aggregated_data["attendees"])) if a.strip()]
+            att_filtered = []
+            for a in att_items:
+                if a.lower() == prim.lower():
+                    continue
+                a_tokens = re.sub(r'^(?:Dr\.|Doctor)\s*', '', a).strip().split()
+                if len(a_tokens) == 1 and prim_surname and a_tokens[0].lower() == prim_surname:
+                    continue
+                att_filtered.append(a)
+            att_filtered = deduplicate_doctor_names(att_filtered)
+            aggregated_data["attendees"] = ", ".join(att_filtered)
+
+        # Extract sample string from user prompt & enforce 10-sample compliance cap
         user_sample_match = re.search(r'\b(\d+\s+samples?(?:\s+of\s+[^.,;\n]+)?)', user_prompt, re.IGNORECASE)
         if user_sample_match:
-            aggregated_data["samples_distributed"] = user_sample_match.group(1).strip()
+            aggregated_data["samples_distributed"] = cap_samples_to_limit(user_sample_match.group(1).strip())
+        elif aggregated_data.get("samples_distributed"):
+            aggregated_data["samples_distributed"] = cap_samples_to_limit(aggregated_data["samples_distributed"])
 
         # Date & Time IST Enforcement:
         # If user did NOT explicitly mention date/time, ALWAYS enforce live IST date & time
@@ -251,6 +307,9 @@ async def handle_chat(request: ChatRequest):
             aggregated_data["date"] = default_date
         if not user_mentioned_time(user_prompt) or not aggregated_data.get("time"):
             aggregated_data["time"] = default_time
+
+        # Polish final reply for compliance limit alignment
+        final_reply = polish_reply(final_reply, user_prompt)
 
         # Fallbacks for interaction_type and sentiment
         if not aggregated_data.get("interaction_type"):
