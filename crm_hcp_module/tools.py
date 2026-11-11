@@ -1,6 +1,7 @@
 import json
+import re
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Union
 from langchain_core.tools import tool
 from database import SessionLocal, Interaction
 
@@ -8,14 +9,14 @@ from database import SessionLocal, Interaction
 # Tool 1: log_complete_interaction
 # =====================================================================
 class LogInteractionInput(BaseModel):
-    hcp_name: str = Field(description="Full name of the Healthcare Professional (e.g. Dr. Rajesh Sharma)")
+    hcp_name: str = Field(description="Full name of ONLY the single primary Healthcare Professional (e.g. 'Dr. Ananya Verma'). NEVER include multiple doctors in this field.")
     interaction_type: Optional[str] = Field(default=None, description="Type of interaction (e.g. In-Person Meeting, Phone Call, Email, Presentation)")
     date: Optional[str] = Field(default=None, description="Date of the interaction in YYYY-MM-DD format (infer from context or today's date)")
-    time: Optional[str] = Field(default=None, description="Time of the interaction (e.g. 10:30 AM)")
-    attendees: Optional[str] = Field(default=None, description="Names of other attendees, clinic staff, or colleagues present")
+    time: Optional[str] = Field(default=None, description="Time of the interaction (e.g. 11:30 AM or 11:30)")
+    attendees: Optional[Union[str, List[str]]] = Field(default=None, description="Names of any additional physicians, colleagues, or staff present (e.g. 'Dr. Rahul Mehta' or ['Dr. Rahul Mehta'])")
     topics_discussed: Optional[str] = Field(default=None, description="Clinical topics, drug details, trial data, or subjects discussed")
     materials_shared: Optional[str] = Field(default=None, description="Materials, brochures, clinical trial papers, or decks shared")
-    samples_distributed: Optional[str] = Field(default=None, description="Number or description of drug samples distributed (e.g. '5 samples')")
+    samples_distributed: Optional[str] = Field(default=None, description="Drug samples distributed (e.g. '5 samples of OncoBoost 50mg'). Record the EXACT quantity specified by the user.")
     sentiment: Optional[str] = Field(default=None, description="Observed sentiment: strictly 'Positive', 'Neutral', or 'Negative'")
     outcomes: Optional[str] = Field(default=None, description="Key takeaways, conclusions, or physician response")
     follow_up_actions: Optional[str] = Field(default=None, description="Follow-up tasks, scheduled meetings, or commitments agreed upon")
@@ -26,7 +27,7 @@ def log_complete_interaction(
     interaction_type: Optional[str] = None, 
     date: Optional[str] = None, 
     time: Optional[str] = None, 
-    attendees: Optional[str] = None, 
+    attendees: Optional[Union[str, List[str]]] = None, 
     topics_discussed: Optional[str] = None, 
     materials_shared: Optional[str] = None, 
     samples_distributed: Optional[str] = None, 
@@ -35,6 +36,12 @@ def log_complete_interaction(
     follow_up_actions: Optional[str] = None
 ) -> str:
     """Logs a new interaction by extracting primary fields from the user's natural language input."""
+    # Ensure attendees is stored as a clean string in the database
+    if isinstance(attendees, list):
+        attendees_str = ", ".join(str(a) for a in attendees if a)
+    else:
+        attendees_str = str(attendees) if attendees else None
+
     db = SessionLocal()
     try:
         new_interaction = Interaction(
@@ -42,7 +49,7 @@ def log_complete_interaction(
             interaction_type=interaction_type,
             date=date,
             time=time,
-            attendees=attendees,
+            attendees=attendees_str,
             topics_discussed=topics_discussed,
             materials_shared=materials_shared,
             samples_distributed=samples_distributed,
@@ -64,7 +71,7 @@ def log_complete_interaction(
 # Tool 2: generate_ai_follow_ups
 # =====================================================================
 class GenerateAIFollowUpsInput(BaseModel):
-    hcp_name: str = Field(description="Name of the HCP")
+    hcp_name: str = Field(description="Name of the primary HCP")
     suggestions: List[str] = Field(default_factory=list, description="List of 2-3 actionable next steps to populate the UI checkboxes.")
 
 @tool("generate_ai_follow_ups", args_schema=GenerateAIFollowUpsInput)
@@ -88,11 +95,11 @@ def generate_ai_follow_ups(hcp_name: str, suggestions: List[str]) -> str:
 # Tool 3: edit_interaction
 # =====================================================================
 class EditInteractionInput(BaseModel):
-    hcp_name: str = Field(description="Name of the Healthcare Professional whose record is being updated")
+    hcp_name: str = Field(description="Name of the single primary Healthcare Professional whose record is being updated")
     interaction_type: Optional[str] = Field(default=None, description="Updated interaction type")
     date: Optional[str] = Field(default=None, description="Updated date in YYYY-MM-DD format")
     time: Optional[str] = Field(default=None, description="Updated time")
-    attendees: Optional[str] = Field(default=None, description="Updated attendees")
+    attendees: Optional[Union[str, List[str]]] = Field(default=None, description="Updated attendees")
     topics_discussed: Optional[str] = Field(default=None, description="Updated topics discussed")
     materials_shared: Optional[str] = Field(default=None, description="Updated materials shared")
     samples_distributed: Optional[str] = Field(default=None, description="Updated samples distributed")
@@ -106,7 +113,7 @@ def edit_interaction(
     interaction_type: Optional[str] = None, 
     date: Optional[str] = None, 
     time: Optional[str] = None, 
-    attendees: Optional[str] = None, 
+    attendees: Optional[Union[str, List[str]]] = None, 
     topics_discussed: Optional[str] = None, 
     materials_shared: Optional[str] = None, 
     samples_distributed: Optional[str] = None, 
@@ -115,18 +122,22 @@ def edit_interaction(
     follow_up_actions: Optional[str] = None
 ) -> str:
     """Updates an existing interaction record. Use this if the user issues a correction to any field."""
+    if isinstance(attendees, list):
+        attendees_str = ", ".join(str(a) for a in attendees if a)
+    else:
+        attendees_str = str(attendees) if attendees else None
+
     db = SessionLocal()
     try:
         interaction = db.query(Interaction).filter(Interaction.hcp_name == hcp_name).order_by(Interaction.id.desc()).first()
         if not interaction:
             return f"No interaction found for {hcp_name}."
         
-        # Update fields dynamically if they are provided
         updates = {
             "interaction_type": interaction_type,
             "date": date,
             "time": time,
-            "attendees": attendees,
+            "attendees": attendees_str,
             "topics_discussed": topics_discussed,
             "materials_shared": materials_shared,
             "samples_distributed": samples_distributed,

@@ -1,8 +1,9 @@
 import os
+import re
 import json
 import traceback
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List, Union
 from dotenv import load_dotenv
 load_dotenv(override=True)
 
@@ -88,6 +89,34 @@ class ChatRequest(BaseModel):
         prompt = (self.text or self.message or "").strip()
         return prompt
 
+def separate_primary_and_attendees(hcp_str: str, attendees_val: Union[str, List[str], None]):
+    """
+    Guarantees that hcp_name contains ONLY the single primary doctor (e.g. 'Dr. Ananya Verma').
+    Any additional doctors or colleagues (e.g. 'Dr. Rahul Mehta') are extracted into attendees.
+    """
+    if isinstance(attendees_val, list):
+        attendees_list = [str(a).strip() for a in attendees_val if str(a).strip()]
+    elif isinstance(attendees_val, str) and attendees_val.strip():
+        attendees_list = [a.strip() for a in re.split(r'[,;]\s*|\s+and\s+', attendees_val) if a.strip()]
+    else:
+        attendees_list = []
+
+    if not hcp_str:
+        return hcp_str, (", ".join(attendees_list) if attendees_list else "")
+
+    # Split on commas or 'and' before another doctor/capitalized name
+    split_pattern = r'\s*(?:,\s*|\s+and\s+)(?=[A-Z]|Dr\.)'
+    parts = [p.strip() for p in re.split(split_pattern, str(hcp_str)) if p.strip()]
+    if len(parts) > 1:
+        primary_hcp = parts[0]
+        additional_doctors = parts[1:]
+        for doc in additional_doctors:
+            if doc not in attendees_list:
+                attendees_list.append(doc)
+        return primary_hcp, ", ".join(attendees_list)
+
+    return hcp_str, (", ".join(attendees_list) if attendees_list else "")
+
 @app.post("/api/chat")
 async def handle_chat(request: ChatRequest):
     user_prompt = request.get_prompt()
@@ -151,13 +180,18 @@ async def handle_chat(request: ChatRequest):
                                     s_val = str(val).capitalize()
                                     if s_val in ["Positive", "Neutral", "Negative"]:
                                         aggregated_data["sentiment"] = s_val
-                                # Format samples distributed (e.g., 10 -> "10 samples")
+                                # Format samples distributed (e.g. 5 -> "5 samples")
                                 elif key == "samples_distributed":
                                     s_val = str(val).strip()
                                     if s_val.isdigit():
                                         aggregated_data["samples_distributed"] = f"{s_val} samples"
                                     else:
                                         aggregated_data["samples_distributed"] = s_val
+                                elif key == "attendees":
+                                    if isinstance(val, list):
+                                        aggregated_data["attendees"] = ", ".join(str(a) for a in val if a)
+                                    else:
+                                        aggregated_data["attendees"] = str(val)
                                 else:
                                     aggregated_data[key] = val
 
@@ -172,6 +206,14 @@ async def handle_chat(request: ChatRequest):
                                     aggregated_data['ai_suggested_follow_ups'] = parsed
                             except Exception:
                                 aggregated_data['ai_suggested_follow_ups'] = [suggestions]
+
+        # Enforce rule: hcp_name must contain ONLY the single primary doctor
+        primary_hcp, normalized_attendees = separate_primary_and_attendees(
+            aggregated_data.get("hcp_name", ""),
+            aggregated_data.get("attendees", "")
+        )
+        aggregated_data["hcp_name"] = primary_hcp
+        aggregated_data["attendees"] = normalized_attendees
 
         # Apply robust fallbacks for required form inputs if missing
         if not aggregated_data.get("interaction_type"):

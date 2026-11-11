@@ -80,8 +80,27 @@ const crmSlice = createSlice({
           if (!Array.isArray(formatted.ai_suggested_follow_ups)) {
             formatted.ai_suggested_follow_ups = [];
           }
+
+          // Format attendees if array
+          if (Array.isArray(formatted.attendees)) {
+            formatted.attendees = formatted.attendees.filter(Boolean).join(', ');
+          }
+
+          // Ensure hcp_name contains ONLY single primary doctor, split extra into attendees
+          if (formatted.hcp_name && (formatted.hcp_name.includes(',') || /\s+and\s+/i.test(formatted.hcp_name))) {
+            const parts = formatted.hcp_name.split(/\s*(?:,\s*|\s+and\s+)(?=[A-Z]|Dr\.)/i).filter(Boolean);
+            if (parts.length > 1) {
+              formatted.hcp_name = parts[0].trim();
+              const extra = parts.slice(1).map(p => p.trim());
+              const currentAttendees = formatted.attendees ? formatted.attendees.split(/,\s*/).map(a => a.trim()) : [];
+              extra.forEach(e => {
+                if (!currentAttendees.includes(e)) currentAttendees.push(e);
+              });
+              formatted.attendees = currentAttendees.join(', ');
+            }
+          }
           
-          // Format samples_distributed cleanly (e.g., 10 -> "10 samples")
+          // Format samples_distributed cleanly (e.g. 5 -> "5 samples")
           if (formatted.samples_distributed) {
             const rawSamples = String(formatted.samples_distributed).trim();
             if (/^\d+$/.test(rawSamples)) {
