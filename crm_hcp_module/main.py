@@ -2,7 +2,7 @@ import os
 import re
 import json
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List, Union
 from dotenv import load_dotenv
 load_dotenv(override=True)
@@ -11,7 +11,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from database import Base, engine
-from agent import get_agent, GROQ_MODEL
+from agent import get_agent, GROQ_MODEL, IST
 from langchain_core.messages import HumanMessage
 
 # Ensure database tables are created on startup
@@ -40,13 +40,62 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def user_mentioned_date(prompt: str) -> bool:
+    patterns = [
+        r'\b(?:january|february|march|april|may|june|july|august|september|october|november|december)\b',
+        r'\b(?:jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec)\b',
+        r'\b(?:yesterday|tomorrow)\b',
+        r'\b(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
+        r'\b\d{4}-\d{2}-\d{2}\b',
+        r'\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b',
+        r'\b\d{1,2}(?:st|nd|rd|th)\b'
+    ]
+    return any(re.search(pat, prompt, re.IGNORECASE) for pat in patterns)
+
+def user_mentioned_time(prompt: str) -> bool:
+    patterns = [
+        r'\b\d{1,2}(?::\d{2})?\s*(?:am|pm)\b',
+        r'\b\d{1,2}:\d{2}\b',
+        r"\b\d{1,2}\s*o'?clock\b",
+        r'\b(?:morning|afternoon|evening|night|noon|midnight)\b',
+        r'\bat\s+\d{1,2}\b'
+    ]
+    return any(re.search(pat, prompt, re.IGNORECASE) for pat in patterns)
+
+def deduplicate_doctor_names(doc_list: List[str]) -> List[str]:
+    """
+    Cleans and deduplicates a list of doctor names.
+    If a surname-only reference (e.g. 'Dr. Nair' or 'Dr. Verma') appears alongside
+    a full name ending in that same surname (e.g. 'Dr. Priya Nair' or 'Dr. Ananya Verma'),
+    the short duplicate is cleanly removed.
+    """
+    cleaned = [d.strip() for d in doc_list if d and d.strip()]
+    result = []
+    for d in cleaned:
+        tokens = re.sub(r'^(?:Dr\.|Doctor)\s*', '', d).split()
+        if len(tokens) == 1:
+            surname = tokens[0].lower()
+            has_full_name = any(
+                len(re.sub(r'^(?:Dr\.|Doctor)\s*', '', other).split()) > 1 and 
+                re.sub(r'^(?:Dr\.|Doctor)\s*', '', other).split()[-1].lower() == surname
+                for other in cleaned if other != d
+            )
+            if has_full_name:
+                continue
+        if d not in result:
+            result.append(d)
+    return result
+
 @app.get("/")
 @app.get("/health")
 async def health_check():
     """Health check endpoint to verify uptime and active model."""
+    now_ist = datetime.now(IST)
     return {
         "status": "ok",
-        "model": os.getenv("GROQ_MODEL", GROQ_MODEL)
+        "model": os.getenv("GROQ_MODEL", GROQ_MODEL),
+        "ist_date": now_ist.strftime("%Y-%m-%d"),
+        "ist_time": now_ist.strftime("%H:%M")
     }
 
 @app.get("/api/models")
@@ -117,10 +166,10 @@ async def handle_chat(request: ChatRequest):
                         final_reply = msg.content
                         break
 
-        # 3. Multi-Tool Data Aggregation
-        now = datetime.now()
-        default_date = now.strftime("%Y-%m-%d")
-        default_time = now.strftime("%H:%M")
+        # 3. Dynamic Indian Standard Time (IST, UTC+5:30) calculation
+        now_ist = datetime.now(IST)
+        default_date = now_ist.strftime("%Y-%m-%d")
+        default_time = now_ist.strftime("%H:%M")
 
         aggregated_data = {
             "hcp_name": "",
@@ -179,37 +228,16 @@ async def handle_chat(request: ChatRequest):
                             except Exception:
                                 aggregated_data['ai_suggested_follow_ups'] = [suggestions]
 
-        # Extract all doctor names from user prompt
-        docs_found = re.findall(r'\b(?:Dr\.|Doctor)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?', user_prompt)
+        # Extract all doctor names from user prompt & deduplicate short surname references
+        docs_raw = re.findall(r'\b(?:Dr\.|Doctor)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?', user_prompt)
+        docs_deduped = deduplicate_doctor_names(docs_raw)
         
-        # Ensure hcp_name is set cleanly (primary doctor)
-        if not aggregated_data.get("hcp_name") and docs_found:
-            aggregated_data["hcp_name"] = docs_found[0]
-            
-        # Ensure attendees is populated so the Attendees input box is NEVER empty
-        if not aggregated_data.get("attendees"):
-            if len(docs_found) > 1:
-                aggregated_data["attendees"] = ", ".join(docs_found)
-            elif docs_found:
-                aggregated_data["attendees"] = docs_found[0]
-            elif aggregated_data.get("hcp_name"):
-                aggregated_data["attendees"] = aggregated_data["hcp_name"]
-
-        # Ensure all doctors found are included in attendees
-        if docs_found:
-            att_list = [a.strip() for a in re.split(r'[,;]\s*|\s+and\s+', str(aggregated_data.get("attendees", ""))) if a.strip()]
-            for d in docs_found:
-                if d not in att_list:
-                    att_list.append(d)
-            # Deduplicate short surname mentions (e.g., 'Dr. Verma' when 'Dr. Ananya Verma' is present)
-            att_cleaned = []
-            for doc in att_list:
-                if any(doc != other and doc in other for other in att_list):
-                    continue
-                att_cleaned.append(doc)
-            aggregated_data["attendees"] = ", ".join(att_cleaned)
-
-        if not aggregated_data.get("attendees") and aggregated_data.get("hcp_name"):
+        # Ensure hcp_name is set cleanly to the primary doctor
+        if docs_deduped:
+            aggregated_data["hcp_name"] = docs_deduped[0]
+            # Ensure attendees contains all deduplicated participants
+            aggregated_data["attendees"] = ", ".join(docs_deduped)
+        elif aggregated_data.get("hcp_name"):
             aggregated_data["attendees"] = aggregated_data["hcp_name"]
 
         # Extract exact sample string from user prompt to prevent ANY accidental overwrite
@@ -217,13 +245,16 @@ async def handle_chat(request: ChatRequest):
         if user_sample_match:
             aggregated_data["samples_distributed"] = user_sample_match.group(1).strip()
 
-        # Apply robust fallbacks for required form inputs if missing
+        # Date & Time IST Enforcement:
+        # If user did NOT explicitly mention date/time, ALWAYS enforce live IST date & time
+        if not user_mentioned_date(user_prompt) or not aggregated_data.get("date"):
+            aggregated_data["date"] = default_date
+        if not user_mentioned_time(user_prompt) or not aggregated_data.get("time"):
+            aggregated_data["time"] = default_time
+
+        # Fallbacks for interaction_type and sentiment
         if not aggregated_data.get("interaction_type"):
             aggregated_data["interaction_type"] = "Meeting"
-        if not aggregated_data.get("date"):
-            aggregated_data["date"] = default_date
-        if not aggregated_data.get("time"):
-            aggregated_data["time"] = default_time
         if not aggregated_data.get("sentiment"):
             aggregated_data["sentiment"] = "Positive"
 

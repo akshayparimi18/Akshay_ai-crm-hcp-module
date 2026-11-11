@@ -81,23 +81,36 @@ const crmSlice = createSlice({
             formatted.ai_suggested_follow_ups = [];
           }
 
-          // Format attendees if array
-          if (Array.isArray(formatted.attendees)) {
-            formatted.attendees = formatted.attendees.filter(Boolean).join(', ');
+          // Format attendees and deduplicate short surname references
+          if (formatted.attendees) {
+            let attList = Array.isArray(formatted.attendees) 
+              ? formatted.attendees 
+              : String(formatted.attendees).split(/,\s*/);
+            
+            attList = attList.map(a => a.trim()).filter(Boolean);
+            
+            const deduped = [];
+            attList.forEach(name => {
+              const tokens = name.replace(/^(?:Dr\.|Doctor)\s*/i, '').trim().split(/\s+/);
+              if (tokens.length === 1) {
+                const surname = tokens[0].toLowerCase();
+                const hasFullName = attList.some(other => {
+                  if (other === name) return false;
+                  const otherTokens = other.replace(/^(?:Dr\.|Doctor)\s*/i, '').trim().split(/\s+/);
+                  return otherTokens.length > 1 && otherTokens[otherTokens.length - 1].toLowerCase() === surname;
+                });
+                if (hasFullName) return;
+              }
+              if (!deduped.includes(name)) {
+                deduped.push(name);
+              }
+            });
+            formatted.attendees = deduped.join(', ');
           }
 
-          // Ensure hcp_name contains ONLY single primary doctor, split extra into attendees
-          if (formatted.hcp_name && (formatted.hcp_name.includes(',') || /\s+and\s+/i.test(formatted.hcp_name))) {
-            const parts = formatted.hcp_name.split(/\s*(?:,\s*|\s+and\s+)(?=[A-Z]|Dr\.)/i).filter(Boolean);
-            if (parts.length > 1) {
-              formatted.hcp_name = parts[0].trim();
-              const extra = parts.slice(1).map(p => p.trim());
-              const currentAttendees = formatted.attendees ? formatted.attendees.split(/,\s*/).map(a => a.trim()) : [];
-              extra.forEach(e => {
-                if (!currentAttendees.includes(e)) currentAttendees.push(e);
-              });
-              formatted.attendees = currentAttendees.join(', ');
-            }
+          // Ensure attendees is never empty if hcp_name is present
+          if (!formatted.attendees && formatted.hcp_name) {
+            formatted.attendees = formatted.hcp_name;
           }
           
           // Format samples_distributed cleanly (e.g. 5 -> "5 samples")
