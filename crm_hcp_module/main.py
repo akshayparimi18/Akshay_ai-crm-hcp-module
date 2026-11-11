@@ -89,34 +89,6 @@ class ChatRequest(BaseModel):
         prompt = (self.text or self.message or "").strip()
         return prompt
 
-def separate_primary_and_attendees(hcp_str: str, attendees_val: Union[str, List[str], None]):
-    """
-    Guarantees that hcp_name contains ONLY the single primary doctor (e.g. 'Dr. Ananya Verma').
-    Any additional doctors or colleagues (e.g. 'Dr. Rahul Mehta') are extracted into attendees.
-    """
-    if isinstance(attendees_val, list):
-        attendees_list = [str(a).strip() for a in attendees_val if str(a).strip()]
-    elif isinstance(attendees_val, str) and attendees_val.strip():
-        attendees_list = [a.strip() for a in re.split(r'[,;]\s*|\s+and\s+', attendees_val) if a.strip()]
-    else:
-        attendees_list = []
-
-    if not hcp_str:
-        return hcp_str, (", ".join(attendees_list) if attendees_list else "")
-
-    # Split on commas or 'and' before another doctor/capitalized name
-    split_pattern = r'\s*(?:,\s*|\s+and\s+)(?=[A-Z]|Dr\.)'
-    parts = [p.strip() for p in re.split(split_pattern, str(hcp_str)) if p.strip()]
-    if len(parts) > 1:
-        primary_hcp = parts[0]
-        additional_doctors = parts[1:]
-        for doc in additional_doctors:
-            if doc not in attendees_list:
-                attendees_list.append(doc)
-        return primary_hcp, ", ".join(attendees_list)
-
-    return hcp_str, (", ".join(attendees_list) if attendees_list else "")
-
 @app.post("/api/chat")
 async def handle_chat(request: ChatRequest):
     user_prompt = request.get_prompt()
@@ -180,7 +152,7 @@ async def handle_chat(request: ChatRequest):
                                     s_val = str(val).capitalize()
                                     if s_val in ["Positive", "Neutral", "Negative"]:
                                         aggregated_data["sentiment"] = s_val
-                                # Format samples distributed (e.g. 5 -> "5 samples")
+                                # Format samples distributed
                                 elif key == "samples_distributed":
                                     s_val = str(val).strip()
                                     if s_val.isdigit():
@@ -207,13 +179,43 @@ async def handle_chat(request: ChatRequest):
                             except Exception:
                                 aggregated_data['ai_suggested_follow_ups'] = [suggestions]
 
-        # Enforce rule: hcp_name must contain ONLY the single primary doctor
-        primary_hcp, normalized_attendees = separate_primary_and_attendees(
-            aggregated_data.get("hcp_name", ""),
-            aggregated_data.get("attendees", "")
-        )
-        aggregated_data["hcp_name"] = primary_hcp
-        aggregated_data["attendees"] = normalized_attendees
+        # Extract all doctor names from user prompt
+        docs_found = re.findall(r'\b(?:Dr\.|Doctor)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?', user_prompt)
+        
+        # Ensure hcp_name is set cleanly (primary doctor)
+        if not aggregated_data.get("hcp_name") and docs_found:
+            aggregated_data["hcp_name"] = docs_found[0]
+            
+        # Ensure attendees is populated so the Attendees input box is NEVER empty
+        if not aggregated_data.get("attendees"):
+            if len(docs_found) > 1:
+                aggregated_data["attendees"] = ", ".join(docs_found)
+            elif docs_found:
+                aggregated_data["attendees"] = docs_found[0]
+            elif aggregated_data.get("hcp_name"):
+                aggregated_data["attendees"] = aggregated_data["hcp_name"]
+
+        # If multiple doctors were mentioned and attendees only has one, include all
+        if len(docs_found) > 1:
+            att_list = [a.strip() for a in re.split(r'[,;]\s*|\s+and\s+', str(aggregated_data.get("attendees", ""))) if a.strip()]
+            for d in docs_found:
+                if d not in att_list:
+                    att_list.append(d)
+            # Deduplicate short surname mentions (e.g., 'Dr. Verma' when 'Dr. Ananya Verma' is present)
+            att_cleaned = []
+            for doc in att_list:
+                if any(doc != other and doc in other for other in att_list):
+                    continue
+                att_cleaned.append(doc)
+            aggregated_data["attendees"] = ", ".join(att_cleaned)
+
+        # Extract exact sample string from user prompt to prevent ANY accidental overwrite
+        user_sample_match = re.search(r'\b(\d+\s+samples?(?:\s+of\s+[^.,;\n]+)?)', user_prompt, re.IGNORECASE)
+        if user_sample_match:
+            user_sample_str = user_sample_match.group(1).strip()
+            # If aggregated_data was empty or generic, use the exact phrase from the user prompt
+            if not aggregated_data.get("samples_distributed") or "of" in user_sample_str:
+                aggregated_data["samples_distributed"] = user_sample_str
 
         # Apply robust fallbacks for required form inputs if missing
         if not aggregated_data.get("interaction_type"):
