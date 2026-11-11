@@ -195,8 +195,8 @@ async def handle_chat(request: ChatRequest):
             elif aggregated_data.get("hcp_name"):
                 aggregated_data["attendees"] = aggregated_data["hcp_name"]
 
-        # If multiple doctors were mentioned and attendees only has one, include all
-        if len(docs_found) > 1:
+        # Ensure all doctors found are included in attendees
+        if docs_found:
             att_list = [a.strip() for a in re.split(r'[,;]\s*|\s+and\s+', str(aggregated_data.get("attendees", ""))) if a.strip()]
             for d in docs_found:
                 if d not in att_list:
@@ -209,13 +209,13 @@ async def handle_chat(request: ChatRequest):
                 att_cleaned.append(doc)
             aggregated_data["attendees"] = ", ".join(att_cleaned)
 
+        if not aggregated_data.get("attendees") and aggregated_data.get("hcp_name"):
+            aggregated_data["attendees"] = aggregated_data["hcp_name"]
+
         # Extract exact sample string from user prompt to prevent ANY accidental overwrite
         user_sample_match = re.search(r'\b(\d+\s+samples?(?:\s+of\s+[^.,;\n]+)?)', user_prompt, re.IGNORECASE)
         if user_sample_match:
-            user_sample_str = user_sample_match.group(1).strip()
-            # If aggregated_data was empty or generic, use the exact phrase from the user prompt
-            if not aggregated_data.get("samples_distributed") or "of" in user_sample_str:
-                aggregated_data["samples_distributed"] = user_sample_str
+            aggregated_data["samples_distributed"] = user_sample_match.group(1).strip()
 
         # Apply robust fallbacks for required form inputs if missing
         if not aggregated_data.get("interaction_type"):
